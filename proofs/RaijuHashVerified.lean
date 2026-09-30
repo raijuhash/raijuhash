@@ -1,0 +1,33 @@
+import RaijuHash.AxiomAudit
+import RaijuHash.ChainProof.Main
+import RaijuHash.ChunkProof.Basic
+import RaijuHash.FullProof.Basic
+import RaijuHash.FullProof.DifferentLengths
+import RaijuHash.FullProof.Short
+import RaijuHash.Regression
+
+/-! Component audits: a quick target for the lemmas behind the main results.
+`RaijuHashCheck` (the default target) audits the main theorems themselves. -/
+audit_axioms RaijuHash.card_KeyTable
+audit_axioms RaijuHash.keyTable_card_pos
+audit_axioms RaijuHash.hashKey_card_pos
+audit_axioms RaijuHash.NHProof.nh_axu
+audit_axioms RaijuHash.ChainProof.chain_distance_two
+audit_axioms RaijuHash.ChunkProof.columns_independent
+audit_axioms RaijuHash.two_nh_count
+audit_axioms RaijuHash.FullProof.lenPoly_injective
+audit_axioms RaijuHash.FullProof.ι_lenPoly_injective
+audit_axioms RaijuHash.FullProof.numChunks_le
+audit_axioms RaijuHash.FullProof.schwartz_zippel_bivariate
+audit_axioms RaijuHash.eval_outerPoly
+audit_axioms RaijuHash.degree_outerPoly
+audit_axioms RaijuHash.uniform_coordinate_bound
+audit_axioms RaijuHash.FullProof.case_diff_length_long
+audit_axioms RaijuHash.FullProof.case_both_short
+audit_axioms RaijuHash.bytes128_injective
+audit_axioms RaijuHash.taggedPoly_length_injective
+audit_axioms RaijuHash.Regression.nat_cast_columns_collapse
+audit_axioms RaijuHash.Regression.bit_columns_distinct
+audit_axioms RaijuHash.Regression.empty_ne_zero_byte_encoding
+audit_axioms RaijuHash.Regression.chunk_boundaries
+audit_axioms RaijuHash.Regression.empty_has_no_chunk

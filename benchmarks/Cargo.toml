@@ -1,0 +1,46 @@
+[package]
+name = "benchmarks"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+raijuhash = { path = "../crates/raijuhash" }
+# Other fast universal hashes, for `axu` only.
+ghash = "0.6.0"
+poly1305 = "0.9.1"
+polyval = "0.7.3"
+umash-sys = "1.0.0"
+hmac = "0.12.1"
+sha2 = "0.10.9"
+aes-gcm = "0.10.3"
+chacha20poly1305 = "0.10.1"
+purecrypto = { version = "=0.8.5", default-features = false, features = ["mac"] }
+halftime = "=0.1.1"
+highway = "=1.3.0"
+siphasher = "=1.0.4"
+
+[[bin]]
+name = "par"
+path = "src/par.rs"
+
+[[bin]]
+name = "quick"
+path = "src/quick.rs"
+
+[[bin]]
+name = "one"
+path = "src/one.rs"
+
+[[bin]]
+name = "axu"
+path = "src/axu.rs"
+
+[[bin]]
+name = "macs"
+path = "src/macs.rs"
+
+[[bin]]
+name = "keyed"
+path = "src/keyed.rs"

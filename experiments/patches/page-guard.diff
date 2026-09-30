@@ -1,0 +1,370 @@
+diff --git a/crates/raijuhash/src/lib.rs b/crates/raijuhash/src/lib.rs
+index 1c253af..d34767a 100644
+--- a/crates/raijuhash/src/lib.rs
++++ b/crates/raijuhash/src/lib.rs
+@@ -165,7 +165,30 @@ impl Backend {
+ }
+ 
+ // Backend dispatch. Each arm is only reachable after `Backend::supported`.
++/// `dispatch_match`, with AVX-512 tested first (see `Key::x86_avx512`).
++#[cfg(target_arch = "x86_64")]
+ macro_rules! dispatch {
++    ($self:ident, $port:expr, |$m:ident| $simd:expr) => {
++        if $self.x86_avx512 {
++            use x86::avx512 as $m;
++            #[allow(unused_unsafe)]
++            unsafe {
++                $simd
++            }
++        } else {
++            dispatch_match!($self, $port, |$m| $simd)
++        }
++    };
++}
++
++#[cfg(not(target_arch = "x86_64"))]
++macro_rules! dispatch {
++    ($self:ident, $port:expr, |$m:ident| $simd:expr) => {
++        dispatch_match!($self, $port, |$m| $simd)
++    };
++}
++
++macro_rules! dispatch_match {
+     ($self:ident, $port:expr, |$m:ident| $simd:expr) => {
+         match $self.backend {
+             #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+@@ -229,6 +252,12 @@ pub struct Key {
+     /// Whether the CPU has AVX2 (for the SSE backend's short path).
+     #[cfg(target_arch = "x86_64")]
+     avx2: bool,
++    /// `backend == X86Avx512`, as its own field: a test of it stays ahead
++    /// of the `match` on `backend`, which LLVM orders by value (AVX-512
++    /// last, after two compares and branches) and would merge a test of
++    /// `backend` into.
++    #[cfg(target_arch = "x86_64")]
++    x86_avx512: bool,
+     pub(crate) s: u128,
+     pub(crate) t: FieldKey,
+     /// Derived for 32..=64-byte messages (SIMD backends that use it).
+@@ -318,6 +347,8 @@ impl Clone for Key {
+             backend: self.backend,
+             #[cfg(target_arch = "x86_64")]
+             avx2: self.avx2,
++            #[cfg(target_arch = "x86_64")]
++            x86_avx512: self.x86_avx512,
+             lazy: Lazy::full(),
+         }
+     }
+@@ -468,6 +499,8 @@ impl Key {
+             core::ptr::addr_of_mut!((*p).backend).write(backend);
+             #[cfg(target_arch = "x86_64")]
+             core::ptr::addr_of_mut!((*p).avx2).write(backend != Backend::Portable && has_avx2());
++            #[cfg(target_arch = "x86_64")]
++            core::ptr::addr_of_mut!((*p).x86_avx512).write(backend == Backend::X86Avx512);
+             let s2 = match backend {
+                 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+                 // SAFETY: the backend is supported; the table was written.
+@@ -604,7 +637,7 @@ impl Key {
+         }
+         if len <= GROUP {
+             #[cfg(target_arch = "x86_64")]
+-            if self.backend == Backend::X86Avx512 {
++            if self.x86_avx512 {
+                 // Its own kernel rather than the generic `finish` (every
+                 // backend, any `Core`): 7-17% faster on Zen 5.
+                 // SAFETY: the backend is supported, a fresh group's rows are
+@@ -770,13 +803,24 @@ impl Key {
+             // `0 * A + S`.
+             return self.s;
+         }
++        // The vector paths read 32 bytes with masks; a message whose read
++        // would cross a page (see `crosses_page`) takes the narrow loads,
++        // through the same call as the other backends (a second call here
++        // made `Key::hash` too large for its callers to inline).
++        #[cfg(target_arch = "x86_64")]
++        let vector = STORED || !x86::crosses_page(msg.as_ptr(), len - 1, SHORT_MAX - 1);
++        // AVX-512 first (see `Key::x86_avx512`).
++        #[cfg(target_arch = "x86_64")]
++        if self.x86_avx512 && vector {
++            // SAFETY: the backend is supported and `0 < len < SHORT_MAX`.
++            return unsafe { x86::avx512::short_msg(self, msg) };
++        }
+         #[cfg(target_arch = "x86_64")]
+         match self.backend {
+-            // SAFETY (both): the backend is supported and `0 < len < SHORT_MAX`.
+-            Backend::X86Avx512 => return unsafe { x86::avx512::short_msg(self, msg) },
+-            Backend::X86Avx2 if !STORED => return unsafe { x86::short_avx2(self, msg) },
++            // SAFETY: the backend is supported and `0 < len < SHORT_MAX`.
++            Backend::X86Avx2 if !STORED && vector => return unsafe { x86::short_avx2(self, msg) },
+             // SAFETY: the backend is supported and the CPU has AVX2.
+-            Backend::X86Sse if !STORED && self.avx2 => return unsafe { x86::short_avx2_x(self, msg) },
++            Backend::X86Sse if !STORED && vector && self.avx2 => return unsafe { x86::short_avx2_x(self, msg) },
+             _ => {},
+         }
+         self.short_narrow(msg)
+@@ -845,6 +889,11 @@ impl Key {
+ 
+     /// A message of `SHORT_MAX..=S2_MAX` bytes.
+     fn medium(&self, msg: &[u8]) -> u128 {
++        #[cfg(target_arch = "x86_64")]
++        if self.x86_avx512 {
++            // SAFETY: the backend is supported; `SHORT_MAX <= len <= S2_MAX`.
++            return unsafe { x86::avx512::medium(self, msg) };
++        }
+         #[cfg(target_arch = "x86_64")]
+         if self.backend == Backend::X86Avx2 {
+             // SAFETY: the backend is supported; `SHORT_MAX <= len <= S2_MAX`.
+diff --git a/crates/raijuhash/src/x86/avx512.rs b/crates/raijuhash/src/x86/avx512.rs
+index bc37659..093ab2b 100644
+--- a/crates/raijuhash/src/x86/avx512.rs
++++ b/crates/raijuhash/src/x86/avx512.rs
+@@ -20,9 +20,10 @@
+ //!   and a streaming hash keeps only `h0` and `h1` between calls.
+ 
+ use core::arch::x86_64::*;
++use core::mem::MaybeUninit;
+ 
+ use crate::params::{BLOCK, CHUNK, CHUNK_BLOCKS, SHORT_MAX};
+-use crate::state::{Core, GROUP, GROUP_BLOCKS};
++use crate::state::{Core, GROUP, GROUP_BLOCKS, copy_small};
+ use crate::{Key, S2_MAX};
+ 
+ type Z = __m512i;
+@@ -536,6 +537,32 @@ unsafe fn length_only(key: &Key, outer: X, len: u64) -> u128 {
+ /// The output after `core` and `pending` (at most 1024 bytes).
+ #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi2,vpclmulqdq,pclmulqdq,bmi2")]
+ pub unsafe fn finish(core: &Core, key: &Key, pending: &[u8], len: u64) -> u128 {
++    unsafe {
++        // `pending` may be message bytes (`hash_parallel`).
++        if !pending.is_empty() && super::near_page_end(pending.as_ptr(), pending.len()) {
++            return finish_copy(core, key, pending, len);
++        }
++        finish_at(core, key, pending, len)
++    }
++}
++
++/// `finish` near a page end: of a copy of `pending` if its reads would
++/// cross the page (see `crosses_page`).
++#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi2,vpclmulqdq,pclmulqdq,bmi2")]
++#[inline(never)]
++#[cold]
++unsafe fn finish_copy(core: &Core, key: &Key, pending: &[u8], len: u64) -> u128 {
++    unsafe {
++        if !super::blocks_cross_page(pending.as_ptr(), pending.len()) {
++            return finish_at(core, key, pending, len);
++        }
++        let mut buf = MaybeUninit::<GroupCopy>::uninit();
++        finish_at(core, key, copy_to(&mut buf, pending), len)
++    }
++}
++
++#[inline(always)]
++unsafe fn finish_at(core: &Core, key: &Key, pending: &[u8], len: u64) -> u128 {
+     unsafe {
+         let n = pending.len().div_ceil(BLOCK);
+         let outer = if core.closed { ldx(&core.outer) } else { _mm_setzero_si128() };
+@@ -558,17 +585,47 @@ pub unsafe fn finish(core: &Core, key: &Key, pending: &[u8], len: u64) -> u128 {
+ pub unsafe fn tail(key: &Key, rest: &[u8], outer: Option<u128>, len: u64) -> u128 {
+     unsafe {
+         debug_assert!(!rest.is_empty() && rest.len() < CHUNK);
++        // The last (partial) group is read with masked loads.
++        let from = (rest.len() - 1) / GROUP * GROUP;
++        let last = &rest[from..];
++        if super::near_page_end(last.as_ptr(), last.len()) {
++            return tail_copy(key, rest, outer, len);
++        }
++        tail_at(key, rest, last.as_ptr(), outer, len)
++    }
++}
++
++/// `tail` near a page end: with a copy of the last group if its reads
++/// would cross the page (see `crosses_page`).
++#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi2,vpclmulqdq,pclmulqdq,bmi2")]
++#[inline(never)]
++#[cold]
++unsafe fn tail_copy(key: &Key, rest: &[u8], outer: Option<u128>, len: u64) -> u128 {
++    unsafe {
++        let last = &rest[(rest.len() - 1) / GROUP * GROUP..];
++        if !super::blocks_cross_page(last.as_ptr(), last.len()) {
++            return tail_at(key, rest, last.as_ptr(), outer, len);
++        }
++        let mut buf = MaybeUninit::<GroupCopy>::uninit();
++        tail_at(key, rest, copy_to(&mut buf, last).as_ptr(), outer, len)
++    }
++}
++
++/// `tail`, with the bytes of its last group (from block `pos`) at `last`.
++#[inline(always)]
++unsafe fn tail_at(key: &Key, rest: &[u8], last: *const u8, outer: Option<u128>, len: u64) -> u128 {
++    unsafe {
+         let nb = rest.len().div_ceil(BLOCK);
+         let pos = (nb - 1) / GROUP_BLOCKS * GROUP_BLOCKS;
+         let n = nb - pos;
+         let r = rest.len() - BLOCK * (nb - 1);
+         let outer = widen(outer.map_or(_mm_setzero_si128(), |o| ldx(&o)));
+         let h = if pos == 0 {
+-            small_n(key, rest.as_ptr(), n, r, outer, len)
++            small_n(key, last, n, r, outer, len)
+         } else {
+             let mut s = Sums::zero();
+             s.groups(key.rows(), rest.as_ptr(), 0, pos / GROUP_BLOCKS);
+-            fin_n(key, s, pos, rest.as_ptr().add(BLOCK * pos), n, r, outer, len)
++            fin_n(key, s, pos, last, n, r, outer, len)
+         };
+         from_x(_mm_xor_si128(h, ldx(&key.s)))
+     }
+@@ -580,10 +637,37 @@ pub unsafe fn tail(key: &Key, rest: &[u8], outer: Option<u128>, len: u64) -> u12
+ /// # Safety
+ /// The CPU must support this backend and `msg.len()` must be in range.
+ #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi2,vpclmulqdq,pclmulqdq,bmi2")]
++#[inline(never)]
+ pub unsafe fn group(key: &Key, msg: &[u8]) -> u128 {
+     unsafe {
+         let len = msg.len();
+         debug_assert!(len > S2_MAX && len <= GROUP);
++        if super::near_page_end(msg.as_ptr(), len) {
++            return group_copy(key, msg);
++        }
++        group_at(key, msg)
++    }
++}
++
++/// `group` near a page end: of a copy of `msg` if its reads would cross
++/// the page (see `crosses_page`).
++#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi2,vpclmulqdq,pclmulqdq,bmi2")]
++#[inline(never)]
++#[cold]
++unsafe fn group_copy(key: &Key, msg: &[u8]) -> u128 {
++    unsafe {
++        if !super::blocks_cross_page(msg.as_ptr(), msg.len()) {
++            return group_at(key, msg);
++        }
++        let mut buf = MaybeUninit::<GroupCopy>::uninit();
++        group_at(key, copy_to(&mut buf, msg))
++    }
++}
++
++#[inline(always)]
++unsafe fn group_at(key: &Key, msg: &[u8]) -> u128 {
++    unsafe {
++        let len = msg.len();
+         let n = len.div_ceil(BLOCK);
+         let h = small_n(key, msg.as_ptr(), n, len - BLOCK * (n - 1), zero(), len as u64);
+         from_x(_mm_xor_si128(h, ldx(&key.s)))
+@@ -591,9 +675,32 @@ pub unsafe fn group(key: &Key, msg: &[u8]) -> u128 {
+ }
+ 
+ /// A message of `SHORT_MAX..=S2_MAX` bytes through the affine form of
+-/// `S2Coeffs`: one masked load, four vector multiplies and a fold.
++/// `S2Coeffs`: one masked load, four vector multiplies and a fold. Out of
++/// line: inlined, it makes `Key::hash` large enough that its callers stop
++/// being inlined into their own loops.
+ #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi2,vpclmulqdq,pclmulqdq,bmi2")]
++#[inline(never)]
+ pub unsafe fn medium(key: &Key, msg: &[u8]) -> u128 {
++    unsafe {
++        if super::crosses_page(msg.as_ptr(), msg.len() - 1, S2_MAX - 1) {
++            return medium_copy(key, msg);
++        }
++        medium_at(key, msg)
++    }
++}
++
++/// `medium` of a copy of `msg` (see `crosses_page`).
++#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi2,vpclmulqdq,pclmulqdq,bmi2")]
++#[inline(never)]
++#[cold]
++unsafe fn medium_copy(key: &Key, msg: &[u8]) -> u128 {
++    let mut b = [0u8; S2_MAX];
++    b[..msg.len()].copy_from_slice(msg);
++    unsafe { medium_at(key, &b[..msg.len()]) }
++}
++
++#[inline(always)]
++unsafe fn medium_at(key: &Key, msg: &[u8]) -> u128 {
+     unsafe {
+         let len = msg.len();
+         debug_assert!((SHORT_MAX..=S2_MAX).contains(&len));
+@@ -688,11 +795,44 @@ pub unsafe fn copy_group(dst: *mut u8, src: &[u8]) {
+             _mm512_storeu_si512(dst.add(64 * i).cast(), ld(s.add(64 * i)));
+         }
+         if n % 64 != 0 {
+-            _mm512_storeu_si512(dst.add(64 * whole).cast(), ldm(s.add(64 * whole), first(n % 64)));
++            let (d, s) = (dst.add(64 * whole), s.add(64 * whole));
++            if super::crosses_page(s, n % 64 - 1, 63) {
++                copy_last(d, s, n % 64);
++            } else {
++                _mm512_storeu_si512(d.cast(), ldm(s, first(n % 64)));
++            }
+         }
+     }
+ }
+ 
++/// `copy_group`'s last vector without reading past `s[..r]` (see
++/// `crosses_page`): zeros, then the bytes.
++#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi2,vpclmulqdq,pclmulqdq,bmi2")]
++#[inline(never)]
++#[cold]
++unsafe fn copy_last(d: *mut u8, s: *const u8, r: usize) {
++    unsafe {
++        _mm512_storeu_si512(d.cast(), zero());
++        copy_small(d, core::slice::from_raw_parts(s, r));
++    }
++}
++
++/// Room for a copy of up to one group, aligned for the kernels' loads.
++#[repr(C, align(64))]
++struct GroupCopy([u8; GROUP]);
++
++/// `m` (at most one group) copied into `buf`.
++#[inline(always)]
++unsafe fn copy_to<'a>(buf: &'a mut MaybeUninit<GroupCopy>, m: &[u8]) -> &'a [u8] {
++    debug_assert!(m.len() <= GROUP);
++    let p = buf.as_mut_ptr() as *mut u8;
++    // SAFETY: `m.len() <= GROUP`; the first `m.len()` bytes are then written.
++    unsafe {
++        copy_small(p, m);
++        core::slice::from_raw_parts(p, m.len())
++    }
++}
++
+ /// The short path for messages of fewer than 32 bytes.
+ #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vbmi2,vpclmulqdq,pclmulqdq,bmi2")]
+ pub unsafe fn short(key: &Key, x0: u128, x1: Option<u128>) -> u128 {
+diff --git a/crates/raijuhash/src/x86/mod.rs b/crates/raijuhash/src/x86/mod.rs
+index c6c85f7..f1ed57e 100644
+--- a/crates/raijuhash/src/x86/mod.rs
++++ b/crates/raijuhash/src/x86/mod.rs
+@@ -26,6 +26,32 @@ pub mod avx512;
+ 
+ type X = __m128i;
+ 
++/// Whether a read from `p` whose last byte is `p[last_read]`, of a message
++/// whose last byte is `p[last]`, reaches a page past the one holding
++/// `p[last]`. Masked loads never fault on their masked-off bytes, but on Zen 5
++/// a masked load that reaches an inaccessible or not-yet-present page this
++/// way takes a microcode assist of about 120 ns on every call (a message
++/// ending just before a guard page, the end of a mapping, or the untouched
++/// part of a fresh allocation). Such rare messages take a copy instead.
++#[inline(always)]
++pub(crate) fn crosses_page(p: *const u8, last: usize, last_read: usize) -> bool {
++    let a = p as usize;
++    (a + last) ^ (a + last_read) >= 4096
++}
++
++/// `crosses_page` for `len > 0` bytes read in whole blocks of 128.
++#[inline(always)]
++pub(crate) fn blocks_cross_page(p: *const u8, len: usize) -> bool {
++    crosses_page(p, len - 1, (len - 1) | (BLOCK - 1))
++}
++
++/// Whether `p[len - 1]` is among the last 127 bytes of its page: a cheaper
++/// first test for `blocks_cross_page`, which implies it.
++#[inline(always)]
++pub(crate) fn near_page_end(p: *const u8, len: usize) -> bool {
++    (p as usize + len - 1) & 4095 > 4096 - BLOCK
++}
++
+ #[target_feature(enable = "sse2,sse4.1,pclmulqdq")]
+ #[inline]
+ fn xzero() -> X {

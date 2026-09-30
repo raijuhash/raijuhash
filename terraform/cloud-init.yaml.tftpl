@@ -1,0 +1,14 @@
+#cloud-config
+# Runs once on first boot. EC2 key pairs reject ECDSA keys, so the key goes here.
+ssh_authorized_keys:
+  - ${jsonencode(ssh_public_key)}
+
+package_update: true
+packages:
+  - build-essential # cc/ld for rustc, binutils (objdump) for asm checks
+  - git
+  - rsync
+
+runcmd:
+  # Latest stable Rust for the ubuntu user.
+  - [su, "-", ubuntu, "-c", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --component rustfmt,clippy"]

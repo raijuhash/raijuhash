@@ -1,0 +1,18 @@
+name = "raijuhash"
+defaultTargets = ["RaijuHash"]
+enableArtifactCache = true
+
+[leanOptions]
+pp.unicode.fun = true
+relaxedAutoImplicit = false
+autoImplicit = false
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.34.0"
+
+[[lean_lib]]
+name = "RaijuHash"
+roots = ["RaijuHashCheck"]
+globs = ["RaijuHashCompress", "RaijuHashFull", "RaijuHashCheck", "RaijuHashVerified", "RaijuHash.+"]

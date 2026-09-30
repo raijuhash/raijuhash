@@ -1,0 +1,30 @@
+[package]
+name = "raijuhash"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+documentation = "https://docs.rs/raijuhash"
+readme = "../../README.md"
+description = "Fast keyed 128-bit almost-XOR-universal hash with a machine-checked bound, and a nonce-based MAC. AVX-512, AVX2, SSE4.1 and NEON kernels; no_std."
+keywords = ["hash", "universal-hash", "mac", "simd", "no-std"]
+categories = ["algorithms", "cryptography", "no-std", "no-std::no-alloc"]
+# Only the crate itself: the benchmarks, experiments, proofs and
+# infrastructure of the repository are not part of the package.
+include = ["/src/**/*.rs", "/tests/**/*.rs", "/examples/**/*.rs", "/gen/*.py", "/SPEC.md", "/LICENSE-*"]
+
+[dependencies]
+aes = { version = "0.9.3", optional = true }
+subtle = { version = "2.6.1", optional = true, default-features = false, features = ["i128"] }
+
+[features]
+default = ["std", "aes"]
+std = []
+aes = ["dep:aes", "dep:subtle"]
+# Test-only backend for emulators without VPCLMULQDQ; never enable in builds.
+emulated-vpclmul = []
+
+[[example]]
+name = "vectors"
+required-features = ["aes"]
