@@ -172,8 +172,6 @@ example with `-C target-cpu=native`.
 | AArch64 (little-endian) with NEON and PMULL | NEON, using `EOR3` where SHA3 is present, and ARMv8 AES |
 | anything else | portable Rust, about 1 byte per cycle |
 
-The minimum supported Rust version is 1.95.
-
 **Known limitation.** With AVX-512 (and AVX2/SSE at 1–31 bytes), the last
 partial vector of a message is read with masked loads. On AMD Zen 5 these
 take a microcode assist of about 120–150 ns if the message ends within

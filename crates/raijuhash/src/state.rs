@@ -95,7 +95,7 @@ pub fn padded_block(src: &[u8]) -> [u8; BLOCK] {
             unsafe { core::ptr::copy_nonoverlapping(src.as_ptr().add(16 * i), dst.as_mut_ptr().add(16 * i), 16) };
         }
     }
-    if n % 16 != 0 {
+    if !n.is_multiple_of(16) {
         let v = partial16(src, 16 * whole);
         // SAFETY: `16 * whole + 16 <= BLOCK` since `n < BLOCK`.
         unsafe { core::ptr::write_unaligned(dst.as_mut_ptr().add(16 * whole) as *mut u128, v.to_le()) };

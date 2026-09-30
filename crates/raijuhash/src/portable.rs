@@ -146,7 +146,7 @@ impl Sums {
 
 pub fn groups(core: &mut Core, key: &Key, data: &[u8]) {
     let mut sums = Sums::load(core);
-    for (i, blk) in data.chunks_exact(BLOCK).enumerate() {
+    for (i, blk) in data.as_chunks::<BLOCK>().0.iter().enumerate() {
         sums.absorb(key, core.pos + i, blk);
     }
     let pos = core.pos + data.len() / BLOCK;

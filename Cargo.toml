@@ -4,8 +4,8 @@ members = ["crates/raijuhash", "experiments", "benchmarks"]
 
 [workspace.package]
 edition = "2024"
-# Tested with 1.95 and 1.98 on aarch64-apple-darwin and x86_64-unknown-linux-gnu.
-rust-version = "1.95"
+# Minimum supported Rust version; newer releases are supported.
+rust-version = "1.98.1"
 license = "CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception"
 repository = "https://github.com/raijuhash/raijuhash"
 

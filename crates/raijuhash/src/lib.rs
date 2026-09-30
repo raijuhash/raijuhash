@@ -95,6 +95,10 @@ impl FieldKey {
 
 /// Implementation selected for a key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "emulated-vpclmul", allow(
+    clippy::manual_non_exhaustive,
+    reason = "The hidden variant selects a real emulator backend, not a non-exhaustive sentinel."
+))]
 pub enum Backend {
     Portable,
     /// AArch64 with PMULL and three-way XOR (FEAT_SHA3).
@@ -667,7 +671,7 @@ impl Key {
         std::thread::scope(|scope| {
             // The calling thread works too.
             for _ in 1..threads {
-                scope.spawn(&work);
+                scope.spawn(work);
             }
             work();
         });
@@ -824,7 +828,7 @@ impl Key {
                 let (now, later) = data.split_at(n * CHUNK);
                 dispatch!(
                     self,
-                    for c in now.chunks_exact(GROUP) {
+                    for c in now.as_chunks::<GROUP>().0 {
                         portable::groups(core, self, c);
                     },
                     |m| m::chunks(core, self, now.as_ptr(), n)

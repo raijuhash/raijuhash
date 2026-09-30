@@ -40,9 +40,9 @@ impl Params {
     /// Parse `KEY_BYTES` bytes: the table row by row, then a, b, r, r2, t, s, v.
     pub fn from_bytes(bytes: &[u8; KEY_BYTES]) -> Self {
         let mut table = [[0u64; 16]; TABLE_ROWS];
-        for (row, src) in table.iter_mut().zip(bytes[..TABLE_BYTES].chunks_exact(BLOCK)) {
-            for (w, b) in row.iter_mut().zip(src.chunks_exact(8)) {
-                *w = u64::from_le_bytes(b.try_into().unwrap());
+        for (row, src) in table.iter_mut().zip(bytes[..TABLE_BYTES].as_chunks::<BLOCK>().0) {
+            for (w, b) in row.iter_mut().zip(src.as_chunks::<8>().0) {
+                *w = u64::from_le_bytes(*b);
             }
         }
         let f = |i: usize| {
